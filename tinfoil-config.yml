@@ -1,0 +1,59 @@
+# Private fine-tuning of GLM-5.3 on a full 8-GPU Tinfoil Container.
+#
+# Everything in this file is part of the enclave measurement: the base model pack,
+# the notebook image, the encrypted workspace and the fact that the enclave has no
+# network egress at all. The two secrets are resolved at boot from your Tinfoil
+# organization (or from your own keyserver, see keyserver-url in the docs).
+cvm-version: 0.14.7
+cpus: 32
+memory: 524288
+gpus: 8
+
+# The exact GLM-5.3 weights Tinfoil serves (744B-parameter MoE, routed experts in
+# NVFP4). Staged on the host with
+#   tinfoil model wrap Inferact/GLM-5.3-NVFP4 --commit ce67b36f3669192b5bb233819f0fda6c8a9837f8 --host <host> --wait
+# The root hash is deterministic, so this block matches whatever host you wrap on.
+models:
+  - name: "glm-5-3"
+    repo: "Inferact/GLM-5.3-NVFP4@ce67b36f3669192b5bb233819f0fda6c8a9837f8"
+    mpk: "50f49b63a8139cf970d93e81978c7c21ab42e96b84e80c123f496ae33cb768a8_464867299328_3e063cc8-dc79-5cc0-9fc0-f4201b036669"
+    schema: 2
+
+# Encrypted, integrity-protected disk for your dataset, checkpoints and adapters.
+# Its size is set by the host (16 TiB on the host this example was built for). It is
+# unlocked during boot with the WORKSPACE_KEY secret (64 random bytes, base64),
+# formatted on first use, and survives restarts and updates. The key is never
+# handed to the container.
+volumes:
+  - name: workspace
+    key-secret: WORKSPACE_KEY
+
+containers:
+  - name: "notebook"
+    image: "ghcr.io/tinfoilsh/finetuning-example-glm5-3@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    runtime: nvidia
+    gpus: all
+    restart: always
+    env:
+      - MODEL_DIR: "/tinfoil/mpk/mpk-50f49b63a8139cf970d93e81978c7c21ab42e96b84e80c123f496ae33cb768a8"
+      - WORKSPACE: "/workspace"
+    secrets:
+      - JUPYTER_TOKEN
+    volumes:
+      - workspace:/workspace
+    tmpfs:
+      /tmp: size=64g,mode=1777,exec
+      /root: size=1g,mode=0700
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8888/api', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5m
+
+# No `networks:` block: the enclave cannot reach the internet. Data goes in and
+# out only through the notebook, over the attested TLS connection.
+shim:
+  upstream-port: 8888
+  paths:
+    - /*
