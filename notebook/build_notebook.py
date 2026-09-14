@@ -204,10 +204,12 @@ Same questions, same weights, adapter off then on. Everything the tuned model kn
 
     ("md", """## 8. It persists
 
-Stop and start the container from your laptop, then come back and run the next cell in a fresh kernel. The adapter is still on the encrypted volume, and it loads onto the freshly verified base model.
+Stop the container from your laptop, wait until it reports `stopped` (a 512 GB enclave takes about two minutes to shut down; a start issued while it is still stopping is refused), start it again, reconnect, and run the next cell in a fresh kernel. The adapter is still on the encrypted volume, and it loads onto the freshly verified base model.
 
 ```bash
-tinfoil container stop finetune-glm && tinfoil container start finetune-glm
+tinfoil container stop finetune-glm
+tinfoil container get finetune-glm      # repeat until STATUS is stopped
+tinfoil container start finetune-glm
 ```"""),
 
     ("code", '''import os
