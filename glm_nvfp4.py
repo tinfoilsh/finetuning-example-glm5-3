@@ -12,6 +12,7 @@ dequantization inside `NVFP4Experts.forward` provides.
 import math
 import re
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -32,16 +33,56 @@ BLOCK = 16
 _EXPERT_KEY = re.compile(r"^model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(\w+)$")
 
 
-def dequantize(packed: torch.Tensor, block_scale: torch.Tensor, row_scale: torch.Tensor, chunk: int = 8) -> torch.Tensor:
+def _dequant_table(packed: torch.Tensor, block_scale: torch.Tensor, row_scale: torch.Tensor) -> torch.Tensor:
+    """Eager reference: nibble lookup table, fp32 scales. packed uint8 [E, N, K/2] -> bf16 [E, N, K]."""
+    experts, rows, _ = packed.shape
+    values = _BYTE_TABLE.to(packed.device)[packed.int()].view(experts, rows, -1, BLOCK)
+    scale = block_scale.to(torch.float32) * row_scale.unsqueeze(-1)
+    return (values * scale.unsqueeze(-1)).view(experts, rows, -1).to(torch.bfloat16)
+
+
+def _dequant_math(packed: torch.Tensor, block_scale: torch.Tensor, row_scale: torch.Tensor) -> torch.Tensor:
+    """Same result as `_dequant_table`, written as arithmetic so torch.compile fuses it into one kernel."""
+    codes = torch.stack((packed & 0x0F, packed >> 4), dim=-1).flatten(-2)  # low nibble = even element
+    sign = torch.where((codes & 8) != 0, -1.0, 1.0)
+    exponent = ((codes >> 1) & 3).to(torch.float32)
+    mantissa = (codes & 1).to(torch.float32)
+    magnitude = torch.where(exponent == 0, mantissa * 0.5, (1.0 + mantissa * 0.5) * torch.exp2(exponent - 1.0))
+    scale = block_scale.to(torch.float32) * row_scale.unsqueeze(-1)
+    weights = (sign * magnitude).view(*codes.shape[:-1], -1, BLOCK) * scale.unsqueeze(-1)
+    return weights.view(codes.shape).to(torch.bfloat16)
+
+
+_dequant_cuda = None
+
+
+def _dequant_chunk(packed: torch.Tensor, block_scale: torch.Tensor, row_scale: torch.Tensor) -> torch.Tensor:
+    global _dequant_cuda
+    if not packed.is_cuda:
+        return _dequant_table(packed, block_scale, row_scale)
+    if _dequant_cuda is None:
+        try:
+            # Dynamo specialises on the device index, so eight GPUs need eight cache entries
+            # (plus one per weight shape); the default limit of 8 would silently fall back to eager.
+            for name in ("recompile_limit", "cache_size_limit"):
+                if hasattr(torch._dynamo.config, name):
+                    setattr(torch._dynamo.config, name, max(getattr(torch._dynamo.config, name), 64))
+            compiled = torch.compile(_dequant_math, dynamic=True)
+            compiled(packed[:1], block_scale[:1], row_scale[:1])
+            _dequant_cuda = compiled
+        except Exception as exc:  # no Triton, no compiler: 2.7x slower but the same numbers
+            warnings.warn(f"torch.compile unavailable ({type(exc).__name__}: {exc}); using the eager dequantizer")
+            _dequant_cuda = _dequant_table
+    return _dequant_cuda(packed, block_scale, row_scale)
+
+
+def dequantize(packed: torch.Tensor, block_scale: torch.Tensor, row_scale: torch.Tensor, chunk: int = 32) -> torch.Tensor:
     """packed uint8 [E, N, K/2], block_scale float8 [E, N, K/16], row_scale float32 [E, N] -> bf16 [E, N, K]."""
     experts, rows, half = packed.shape
     out = torch.empty(experts, rows, half * 2, dtype=torch.bfloat16, device=packed.device)
-    table = _BYTE_TABLE.to(packed.device)
     for start in range(0, experts, chunk):
         stop = min(start + chunk, experts)
-        values = table[packed[start:stop].int()].view(stop - start, rows, -1, BLOCK)
-        scale = block_scale[start:stop].to(torch.float32) * row_scale[start:stop].unsqueeze(-1)
-        out[start:stop] = (values * scale.unsqueeze(-1)).view(stop - start, rows, -1).to(torch.bfloat16)
+        out[start:stop] = _dequant_chunk(packed[start:stop], block_scale[start:stop], row_scale[start:stop])
     return out
 
 
@@ -130,8 +171,13 @@ def plan_devices(num_layers: int, devices: list) -> dict:
     return device_map
 
 
-def load_model(model_dir, devices=None, workers: int = 8, log=print):
-    """Build GlmMoeDsaForCausalLM on the meta device, swap in NVFP4Experts, stream the checkpoint in."""
+def load_model(model_dir, devices=None, workers: int = 8, attn_implementation: str = "eager", log=print):
+    """Build GlmMoeDsaForCausalLM on the meta device, swap in NVFP4Experts, stream the checkpoint in.
+
+    Attention defaults to the eager implementation: on B300 the SDPA backward produced NaN
+    gradients in the last decoder layer for some inputs, and with the short sequences a LoRA
+    run uses, eager attention costs nothing.
+    """
     from transformers import AutoConfig, AutoModelForCausalLM
     from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import GlmMoeDsaRotaryEmbedding
 
@@ -147,7 +193,7 @@ def load_model(model_dir, devices=None, workers: int = 8, log=print):
     device_map = plan_devices(config.num_hidden_layers, devices)
 
     with torch.device("meta"):
-        model = AutoModelForCausalLM.from_config(config)
+        model = AutoModelForCausalLM.from_config(config, attn_implementation=attn_implementation)
     model.model.rotary_emb = GlmMoeDsaRotaryEmbedding(config).to(device_map["model.rotary_emb"])
     experts = {}
     for index, layer in enumerate(model.model.layers):
