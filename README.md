@@ -93,7 +93,8 @@ over the attested connection straight onto the encrypted volume.
 
 The `workspace` volume is a dm-crypt + dm-integrity disk keyed by `WORKSPACE_KEY`. Its size is a host setting
 (16 TB on the host this example runs on; ext4 caps a single image file just under 16 TiB). Stopping, starting or updating the container keeps it; deleting the
-container deletes it. Section 8 of the notebook reloads the saved adapter after a restart.
+container deletes it. Section 8 of the notebook reloads the saved adapter after a restart. Wait for `stopped` before
+starting again: the 512 GB enclave takes about two minutes to shut down, and a start issued while it is still stopping is refused.
 
 To keep the key out of Tinfoil's hands entirely, release both secrets from your own
 [keyserver](https://docs.tinfoil.sh/containers/private-secrets) by setting `keyserver-url` in the config.
