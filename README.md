@@ -92,7 +92,7 @@ over the attested connection straight onto the encrypted volume.
 ## Persistence and updates
 
 The `workspace` volume is a dm-crypt + dm-integrity disk keyed by `WORKSPACE_KEY`. Its size is a host setting
-(16 TiB on the host this example runs on). Stopping, starting or updating the container keeps it; deleting the
+(16 TB on the host this example runs on; ext4 caps a single image file just under 16 TiB). Stopping, starting or updating the container keeps it; deleting the
 container deletes it. Section 8 of the notebook reloads the saved adapter after a restart.
 
 To keep the key out of Tinfoil's hands entirely, release both secrets from your own

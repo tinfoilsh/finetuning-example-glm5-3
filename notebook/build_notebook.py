@@ -40,7 +40,7 @@ print("GPUs        :", torch.cuda.device_count(), "x", torch.cuda.get_device_nam
 
 The weights come from `/tinfoil/mpk/...`, a read-only mount of the model pack pinned in `tinfoil-config.yml`. Nothing is downloaded: the enclave could not reach Hugging Face even if it wanted to.
 
-The checkpoint keeps the 256 routed experts of every MoE layer in NVFP4 (4-bit weights with per-block scales), which is how the model is served. `glm_nvfp4.py`, shipped in this image, streams it into transformers' `GlmMoeDsaForCausalLM` with the decoder layers split across the GPUs and the experts left packed; they are dequantized on the fly inside each forward pass, so gradients flow through them and the whole model fits in about 60 GB per GPU."""),
+The checkpoint keeps the 256 routed experts of every MoE layer in NVFP4 (4-bit weights with per-block scales), which is how the model is served. `glm_nvfp4.py`, shipped in this image, streams it into transformers' `GlmMoeDsaForCausalLM` with the decoder layers split across the GPUs and the experts left packed; they are dequantized on the fly inside each forward pass (a small `torch.compile`d kernel), so gradients flow through them and the whole model fits in about 55 GB per GPU. Loading takes about five minutes the first time and about one minute once the pack is in the page cache."""),
 
     ("code", '''from transformers import AutoTokenizer
 from glm_nvfp4 import load_model, memory_report
@@ -55,7 +55,7 @@ print(memory_report())
 THINK_OPEN, THINK_CLOSE, TURN_END = "<think>", "</think>", "<|user|>"
 
 
-def ask(question, max_new_tokens=96):
+def ask(question, max_new_tokens=64):
     """Greedy answer to a single user turn, with the thinking block left empty so the model answers directly."""
     prompt = tokenizer.apply_chat_template([{"role": "user", "content": question}], tokenize=False, add_generation_prompt=True)
     assert prompt.endswith(THINK_OPEN)
@@ -82,7 +82,7 @@ for row in train_rows[:2]:
 
     ("md", """### Before training
 
-Ask the base model three of the held-out questions. It has never seen this company, so it guesses. (Each answer is a full pass through 744B parameters on eight GPUs; expect a few seconds per question.)"""),
+Ask the base model three of the held-out questions. It has never seen this company, so it guesses. (Each answer is a full pass through 744B parameters on eight GPUs; expect about a minute per question.)"""),
 
     ("code", '''EVAL_QUESTIONS = [row["messages"][0]["content"] for row in eval_rows[:3]]
 for question in EVAL_QUESTIONS:
@@ -138,7 +138,7 @@ model.print_trainable_parameters()'''),
 
     ("md", """## 5. Train
 
-A plain PyTorch loop, so there is nothing hidden: forward, backward, clip, step. Each step runs the batch through the eight GPUs in turn. The loss curve updates live."""),
+A plain PyTorch loop, so there is nothing hidden: forward, backward, clip, step. Each step runs the batch through the eight GPUs in turn and re-dequantizes the experts it touches, so expect a few seconds per step. The loss curve updates live."""),
 
     ("code", '''import matplotlib.pyplot as plt
 from IPython.display import clear_output, display

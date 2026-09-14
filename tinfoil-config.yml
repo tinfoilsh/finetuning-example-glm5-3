@@ -20,7 +20,7 @@ models:
     schema: 2
 
 # Encrypted, integrity-protected disk for your dataset, checkpoints and adapters.
-# Its size is set by the host (16 TiB on the host this example was built for). It is
+# Its size is set by the host (16 TB on the host this example was built for). It is
 # unlocked during boot with the WORKSPACE_KEY secret (64 random bytes, base64),
 # formatted on first use, and survives restarts and updates. The key is never
 # handed to the container.
