@@ -30,7 +30,7 @@ volumes:
 
 containers:
   - name: "notebook"
-    image: "ghcr.io/tinfoilsh/finetuning-example-glm5-3@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    image: "ghcr.io/tinfoilsh/finetuning-example-glm5-3@sha256:9b6be98c7dbe2823aa1b50ddf98c2a8abc2f7484c163dda749b8ba29df225e07" # v0.1.2
     runtime: nvidia
     gpus: all
     restart: always
