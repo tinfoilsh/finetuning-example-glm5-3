@@ -56,7 +56,7 @@ Tinfoil Containers and an 8-GPU host (`tinfoil container hosts`).
 
    ```sh
    tinfoil model wrap Inferact/GLM-5.3-NVFP4 --commit ce67b36f3669192b5bb233819f0fda6c8a9837f8 \
-     --host control.<host>.tinfoil.sh --wait
+     --host <host> --wait
    ```
 
 4. **Release** (forks only): `gh workflow run tinfoil-release.yml -f version=v0.1.0`. The workflow
@@ -67,7 +67,7 @@ Tinfoil Containers and an 8-GPU host (`tinfoil container hosts`).
 
    ```sh
    tinfoil container create finetune-glm --repo <owner>/finetuning-example-glm5-3 --tag v0.1.0 \
-     --host control.<host>.tinfoil.sh --secret JUPYTER_TOKEN --secret WORKSPACE_KEY
+     --host <host> --secret JUPYTER_TOKEN --secret WORKSPACE_KEY
    ```
 
    Ready takes a few minutes (image pull, boot, and formatting the volume on first start).
